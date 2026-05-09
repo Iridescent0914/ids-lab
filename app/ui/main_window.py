@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 from app.capture.models import PacketSummary, summary_from_packet_info
 from app.capture.packet_capture import CaptureInterface, PacketCaptureWorker, list_interfaces
-from app.capture.pcap_reader import PcapReadError, read_pcap
+from app.capture.pcap_importer import PcapImportWorker
 from app.core.config import AppConfig
 from app.detection.signature_detector import SignatureDetector
 from app.detection.threshold_detector import ThresholdDetector, ThresholdSettings
@@ -41,16 +41,15 @@ class MainWindow(QMainWindow):
         self.database = database
         self.capture_thread: QThread | None = None
         self.capture_worker: PacketCaptureWorker | None = None
+        self.pcap_import_thread: QThread | None = None
+        self.pcap_import_worker: PcapImportWorker | None = None
+        self.pcap_import_name = ""
+        self.pcap_import_had_error = False
         self.available_interfaces: list[CaptureInterface] = []
         self.rules: list[DetectionRule] = []
+        self.signature_detector = SignatureDetector(self.rules)
         self.loading_rules_table = False
-        self.threshold_detector = ThresholdDetector(
-            ThresholdSettings(
-                window_seconds=config.threshold.window_seconds,
-                port_scan_unique_ports=config.threshold.port_scan_unique_ports,
-                icmp_high_frequency_count=config.threshold.icmp_high_frequency_count,
-            )
-        )
+        self.threshold_detector = ThresholdDetector(self._threshold_settings())
         self.total_packets = 0
         self.total_alerts = 0
         self.high_severity_alerts = 0
@@ -65,6 +64,16 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_tabs()
         self.reload_rules()
+
+    def _threshold_settings(self) -> ThresholdSettings:
+        return ThresholdSettings(
+            window_seconds=self.config.threshold.window_seconds,
+            port_scan_unique_ports=self.config.threshold.port_scan_unique_ports,
+            icmp_high_frequency_count=self.config.threshold.icmp_high_frequency_count,
+        )
+
+    def _reset_threshold_detector(self) -> None:
+        self.threshold_detector.reset()
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
@@ -260,20 +269,29 @@ class MainWindow(QMainWindow):
         )
         if not file_name:
             return
-
-        try:
-            packets = read_pcap(Path(file_name))
-        except PcapReadError as exc:
-            QMessageBox.warning(self, "PCAP Error", str(exc))
-            self.statusBar().showMessage("Failed to import PCAP")
+        if self.capture_thread is not None or self.pcap_import_thread is not None:
             return
 
         self.clear_traffic()
-        for packet in packets:
-            self.add_packet_info(packet)
+        self.pcap_import_name = Path(file_name).name
+        self.pcap_import_had_error = False
+        self.pcap_import_thread = QThread(self)
+        self.pcap_import_worker = PcapImportWorker(Path(file_name))
+        self.pcap_import_worker.moveToThread(self.pcap_import_thread)
+
+        self.pcap_import_thread.started.connect(self.pcap_import_worker.run)
+        self.pcap_import_worker.packet_batch.connect(self.add_packet_batch)
+        self.pcap_import_worker.status_changed.connect(self.statusBar().showMessage)
+        self.pcap_import_worker.failed.connect(self._pcap_import_failed)
+        self.pcap_import_worker.finished.connect(self._pcap_import_finished)
+        self.pcap_import_worker.finished.connect(self.pcap_import_thread.quit)
+        self.pcap_import_worker.finished.connect(self.pcap_import_worker.deleteLater)
+        self.pcap_import_thread.finished.connect(self.pcap_import_thread.deleteLater)
+
+        self._set_busy_controls()
+        self.pcap_import_thread.start()
         self.statusBar().showMessage(
-            f"Processed {len(packets)} packets from {Path(file_name).name}; "
-            f"displaying latest {self.traffic_table.rowCount()}"
+            f"Importing {self.pcap_import_name} in background..."
         )
 
     def start_capture(self) -> None:
@@ -286,6 +304,7 @@ class MainWindow(QMainWindow):
         if self.capture_thread is not None:
             return
 
+        self._reset_threshold_detector()
         self.capture_thread = QThread(self)
         self.capture_worker = PacketCaptureWorker(interface=interface)
         self.capture_worker.moveToThread(self.capture_thread)
@@ -299,16 +318,14 @@ class MainWindow(QMainWindow):
         self.capture_worker.finished.connect(self.capture_worker.deleteLater)
         self.capture_thread.finished.connect(self.capture_thread.deleteLater)
 
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.import_button.setEnabled(False)
-        self.clear_button.setEnabled(False)
-        self.refresh_button.setEnabled(False)
-        self.advanced_interfaces_checkbox.setEnabled(False)
-        self.interface_combo.setEnabled(False)
+        self._set_busy_controls()
         self.capture_thread.start()
 
     def stop_capture(self) -> None:
+        if self.pcap_import_worker is not None:
+            self.pcap_import_worker.stop()
+            self.statusBar().showMessage("Stopping PCAP import...")
+            return
         if self.capture_worker is not None:
             self.capture_worker.stop()
             self.statusBar().showMessage("Stopping capture...")
@@ -319,13 +336,55 @@ class MainWindow(QMainWindow):
     def _capture_finished(self) -> None:
         self.capture_worker = None
         self.capture_thread = None
+        self._set_idle_controls()
+
+    def _pcap_import_failed(self, message: str) -> None:
+        self.pcap_import_had_error = True
+        QMessageBox.warning(self, "PCAP Error", message)
+
+    def _pcap_import_finished(self, processed_count: int, cancelled: bool) -> None:
+        imported_name = self.pcap_import_name
+        had_error = self.pcap_import_had_error
+        self.pcap_import_worker = None
+        self.pcap_import_thread = None
+        self.pcap_import_name = ""
+        self.pcap_import_had_error = False
+        self._set_idle_controls()
+        if had_error:
+            self.statusBar().showMessage(
+                f"PCAP import failed after {processed_count} packets from {imported_name}"
+            )
+            return
+        if cancelled:
+            self.statusBar().showMessage(
+                f"PCAP import stopped after {processed_count} packets from {imported_name}; "
+                f"displaying latest {self.traffic_table.rowCount()}"
+            )
+            return
+        self.statusBar().showMessage(
+            f"Processed {processed_count} packets from {imported_name}; "
+            f"displaying latest {self.traffic_table.rowCount()}"
+        )
+
+    def _set_idle_controls(self) -> None:
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.import_button.setEnabled(True)
         self.clear_button.setEnabled(True)
         self.refresh_button.setEnabled(True)
+        self.rules_button.setEnabled(True)
         self.advanced_interfaces_checkbox.setEnabled(True)
         self.interface_combo.setEnabled(True)
+
+    def _set_busy_controls(self) -> None:
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.import_button.setEnabled(False)
+        self.clear_button.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.rules_button.setEnabled(False)
+        self.advanced_interfaces_checkbox.setEnabled(False)
+        self.interface_combo.setEnabled(False)
 
     def reload_rules(self) -> None:
         rules_path = Path(self.config.default_rules_path)
@@ -340,6 +399,7 @@ class MainWindow(QMainWindow):
             return
 
         self.rules = result.rules
+        self.signature_detector = SignatureDetector(self.rules)
         self.populate_rules_table()
         self.statusBar().showMessage(
             f"Loaded {len(result.rules)} rules from {Path(result.source_path).name}: "
@@ -400,7 +460,7 @@ class MainWindow(QMainWindow):
     def clear_traffic(self) -> None:
         self.traffic_table.setRowCount(0)
         self.alerts_table.setRowCount(0)
-        self.threshold_detector.reset()
+        self._reset_threshold_detector()
         for rule in self.rules:
             rule.hit_count = 0
             rule.last_hit = None
@@ -422,20 +482,48 @@ class MainWindow(QMainWindow):
         self.add_packet_summary(summary_from_packet_info(packet))
         self.detect_packet(packet)
 
-    def detect_packet(self, packet: PacketInfo) -> None:
-        signature_alerts = SignatureDetector(self.rules).detect(packet)
+    def add_packet_batch(self, packets: list[PacketInfo]) -> None:
+        if not packets:
+            return
+
+        self.traffic_table.setUpdatesEnabled(False)
+        self.alerts_table.setUpdatesEnabled(False)
+        rules_changed = False
+        try:
+            for packet in packets:
+                self.add_packet_summary(summary_from_packet_info(packet), refresh_statistics=False)
+                rules_changed = (
+                    self.detect_packet(packet, refresh_rules=False, refresh_statistics=False)
+                    or rules_changed
+                )
+        finally:
+            self.traffic_table.setUpdatesEnabled(True)
+            self.alerts_table.setUpdatesEnabled(True)
+
+        if rules_changed:
+            self.populate_rules_table()
+        self.refresh_statistics_view()
+
+    def detect_packet(
+        self,
+        packet: PacketInfo,
+        refresh_rules: bool = True,
+        refresh_statistics: bool = True,
+    ) -> bool:
+        signature_alerts = self.signature_detector.detect(packet)
         threshold_alerts = self.threshold_detector.detect(packet)
         alerts = signature_alerts + threshold_alerts
         if not alerts:
-            return
+            return False
 
         for alert in alerts:
             self.database.insert_alert(alert)
-            self.add_alert_event(alert)
-        if signature_alerts:
+            self.add_alert_event(alert, refresh_statistics=refresh_statistics)
+        if signature_alerts and refresh_rules:
             self.populate_rules_table()
+        return bool(signature_alerts)
 
-    def add_alert_event(self, alert: AlertEvent) -> None:
+    def add_alert_event(self, alert: AlertEvent, refresh_statistics: bool = True) -> None:
         row = self.alerts_table.rowCount()
         self.alerts_table.insertRow(row)
         values = [
@@ -456,11 +544,10 @@ class MainWindow(QMainWindow):
             self.high_severity_alerts += 1
         self.alert_severity_counts[alert.severity] = self.alert_severity_counts.get(alert.severity, 0) + 1
         self.alert_type_counts[alert.alert_type] = self.alert_type_counts.get(alert.alert_type, 0) + 1
-        self.total_alerts_label.setText(f"Total alerts: {self.total_alerts}")
-        self.high_alerts_label.setText(f"High severity alerts: {self.high_severity_alerts}")
-        self.update_statistics_labels()
+        if refresh_statistics:
+            self.refresh_statistics_view()
 
-    def add_packet_summary(self, packet: PacketSummary) -> None:
+    def add_packet_summary(self, packet: PacketSummary, refresh_statistics: bool = True) -> None:
         max_rows = self.config.capture.max_display_packets
         if self.traffic_table.rowCount() >= max_rows:
             self.traffic_table.removeRow(0)
@@ -482,7 +569,13 @@ class MainWindow(QMainWindow):
         self.total_packets += 1
         protocol = packet.protocol if packet.protocol in self.protocol_counts else "OTHER"
         self.protocol_counts[protocol] += 1
+        if refresh_statistics:
+            self.refresh_statistics_view()
+
+    def refresh_statistics_view(self) -> None:
         self.total_packets_label.setText(f"Total packets: {self.total_packets}")
+        self.total_alerts_label.setText(f"Total alerts: {self.total_alerts}")
+        self.high_alerts_label.setText(f"High severity alerts: {self.high_severity_alerts}")
         self.update_statistics_labels()
 
     def update_statistics_labels(self) -> None:
@@ -507,6 +600,11 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: object) -> None:
+        if self.pcap_import_worker is not None:
+            self.pcap_import_worker.stop()
+            if self.pcap_import_thread is not None:
+                self.pcap_import_thread.quit()
+                self.pcap_import_thread.wait(1500)
         if self.capture_worker is not None:
             self.capture_worker.stop()
             if self.capture_thread is not None:

@@ -22,6 +22,10 @@ class PacketInfo:
     arp_operation: str | None = None
 
     @property
+    def timestamp_epoch(self) -> float:
+        return self.timestamp.timestamp()
+
+    @property
     def timestamp_text(self) -> str:
         return self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
 
