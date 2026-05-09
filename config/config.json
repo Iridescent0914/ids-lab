@@ -1,0 +1,22 @@
+{
+  "app_name": "LightIDS",
+  "storage": {
+    "database_path": "data/lightids.db"
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/lightids.log"
+  },
+  "rules": {
+    "default_rules_path": "rules/default.rules"
+  },
+  "capture": {
+    "max_display_packets": 1000,
+    "default_timeout_seconds": 30
+  },
+  "threshold": {
+    "window_seconds": 10,
+    "port_scan_unique_ports": 10,
+    "icmp_high_frequency_count": 20
+  }
+}

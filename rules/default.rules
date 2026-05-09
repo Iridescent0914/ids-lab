@@ -1,0 +1,9 @@
+# LightIDS default rules
+# These rules observe typical network events and verify protocol,
+# port, content/nocase, and TCP flags matching.
+alert icmp any any -> any any (msg:"ICMP packet observed"; sid:1001; priority:4;)
+alert tcp any any -> any 22 (msg:"SSH access observed"; sid:1002; priority:2;)
+alert tcp any any -> any 80 (msg:"HTTP access observed"; sid:1003; priority:4;)
+alert tcp any any -> any 443 (msg:"HTTPS access observed"; sid:1004; priority:4;)
+alert tcp any any -> any any (msg:"TCP SYN packet observed"; sid:1005; priority:4; flags:S;)
+alert tcp any any -> any 80 (msg:"HTTP GET request observed"; sid:1006; priority:4; content:"GET"; nocase;)
