@@ -18,6 +18,7 @@ class ThresholdConfig:
 @dataclass(frozen=True)
 class CaptureConfig:
     max_display_packets: int
+    max_display_alerts: int
     default_timeout_seconds: int
 
 
@@ -63,6 +64,7 @@ def load_config(path: Path, root: Path) -> AppConfig:
         ),
         capture=CaptureConfig(
             max_display_packets=int(capture.get("max_display_packets", 1000)),
+            max_display_alerts=int(capture.get("max_display_alerts", 1000)),
             default_timeout_seconds=int(capture.get("default_timeout_seconds", 30)),
         ),
     )

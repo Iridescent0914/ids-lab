@@ -12,6 +12,7 @@
   },
   "capture": {
     "max_display_packets": 1000,
+    "max_display_alerts": 1000,
     "default_timeout_seconds": 30
   },
   "threshold": {

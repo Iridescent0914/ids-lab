@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, Qt
@@ -45,6 +46,7 @@ class MainWindow(QMainWindow):
         self.pcap_import_worker: PcapImportWorker | None = None
         self.pcap_import_name = ""
         self.pcap_import_had_error = False
+        self.last_capture_interface: str | None = None
         self.available_interfaces: list[CaptureInterface] = []
         self.rules: list[DetectionRule] = []
         self.signature_detector = SignatureDetector(self.rules)
@@ -56,6 +58,7 @@ class MainWindow(QMainWindow):
         self.protocol_counts = {"TCP": 0, "UDP": 0, "ICMP": 0, "ARP": 0, "OTHER": 0}
         self.alert_severity_counts: dict[int, int] = {}
         self.alert_type_counts = {"rule_event": 0, "threshold_alert": 0}
+        self.current_alerts: list[AlertEvent] = []
 
         self.setWindowTitle(config.app_name)
         self.resize(1100, 720)
@@ -76,8 +79,10 @@ class MainWindow(QMainWindow):
         self.threshold_detector.reset()
 
     def _build_toolbar(self) -> None:
-        toolbar = QToolBar("Main")
-        toolbar.setMovable(False)
+        capture_toolbar = QToolBar("Capture")
+        capture_toolbar.setMovable(False)
+        data_toolbar = QToolBar("Data")
+        data_toolbar.setMovable(False)
 
         self.interface_combo = QComboBox()
         self.interface_combo.setMinimumWidth(260)
@@ -88,21 +93,37 @@ class MainWindow(QMainWindow):
         self.import_button = QPushButton("Import PCAP")
         self.clear_button = QPushButton("Clear Traffic")
         self.rules_button = QPushButton("Reload Rules")
+        self.alert_filter_combo = QComboBox()
+        self.load_history_button = QPushButton("Load History")
+        self.export_button = QPushButton("Export CSV")
+        self.clear_logs_button = QPushButton("Clear Logs")
 
         self.stop_button.setEnabled(False)
+        self.alert_filter_combo.addItem("All alerts", None)
+        self.alert_filter_combo.addItem("Rule events", "rule_event")
+        self.alert_filter_combo.addItem("Threshold alerts", "threshold_alert")
 
-        toolbar.addWidget(self.interface_combo)
-        toolbar.addWidget(self.advanced_interfaces_checkbox)
-        toolbar.addWidget(self.refresh_button)
-        toolbar.addSeparator()
-        toolbar.addWidget(self.start_button)
-        toolbar.addWidget(self.stop_button)
-        toolbar.addSeparator()
-        toolbar.addWidget(self.import_button)
-        toolbar.addWidget(self.clear_button)
-        toolbar.addSeparator()
-        toolbar.addWidget(self.rules_button)
-        self.addToolBar(toolbar)
+        capture_toolbar.addWidget(self.interface_combo)
+        capture_toolbar.addWidget(self.advanced_interfaces_checkbox)
+        capture_toolbar.addWidget(self.refresh_button)
+        capture_toolbar.addSeparator()
+        capture_toolbar.addWidget(self.start_button)
+        capture_toolbar.addWidget(self.stop_button)
+
+        data_toolbar.addWidget(self.import_button)
+        data_toolbar.addWidget(self.clear_button)
+        data_toolbar.addSeparator()
+        data_toolbar.addWidget(self.rules_button)
+        data_toolbar.addSeparator()
+        data_toolbar.addWidget(QLabel("Alert filter:"))
+        data_toolbar.addWidget(self.alert_filter_combo)
+        data_toolbar.addWidget(self.load_history_button)
+        data_toolbar.addWidget(self.export_button)
+        data_toolbar.addWidget(self.clear_logs_button)
+
+        self.addToolBar(capture_toolbar)
+        self.addToolBarBreak()
+        self.addToolBar(data_toolbar)
 
         self.refresh_button.clicked.connect(self.refresh_interfaces)
         self.advanced_interfaces_checkbox.toggled.connect(self.populate_interface_combo)
@@ -112,6 +133,10 @@ class MainWindow(QMainWindow):
         self.import_button.clicked.connect(self.import_pcap)
         self.clear_button.clicked.connect(self.clear_traffic)
         self.rules_button.clicked.connect(self.reload_rules)
+        self.alert_filter_combo.currentIndexChanged.connect(self.apply_alert_filter)
+        self.load_history_button.clicked.connect(self.load_alert_history)
+        self.export_button.clicked.connect(self.export_alerts_csv)
+        self.clear_logs_button.clicked.connect(self.clear_alert_logs)
         self.refresh_interfaces()
 
     def _build_tabs(self) -> None:
@@ -304,6 +329,9 @@ class MainWindow(QMainWindow):
         if self.capture_thread is not None:
             return
 
+        if not self._confirm_new_interface_session(interface):
+            return
+
         self._reset_threshold_detector()
         self.capture_thread = QThread(self)
         self.capture_worker = PacketCaptureWorker(interface=interface)
@@ -319,6 +347,7 @@ class MainWindow(QMainWindow):
         self.capture_thread.finished.connect(self.capture_thread.deleteLater)
 
         self._set_busy_controls()
+        self.last_capture_interface = interface
         self.capture_thread.start()
 
     def stop_capture(self) -> None:
@@ -358,12 +387,14 @@ class MainWindow(QMainWindow):
         if cancelled:
             self.statusBar().showMessage(
                 f"PCAP import stopped after {processed_count} packets from {imported_name}; "
-                f"displaying latest {self.traffic_table.rowCount()}"
+                f"displaying latest {self.traffic_table.rowCount()} packets and "
+                f"{self.alerts_table.rowCount()} alerts"
             )
             return
         self.statusBar().showMessage(
             f"Processed {processed_count} packets from {imported_name}; "
-            f"displaying latest {self.traffic_table.rowCount()}"
+            f"displaying latest {self.traffic_table.rowCount()} packets and "
+            f"{self.alerts_table.rowCount()} of {self.total_alerts} alerts"
         )
 
     def _set_idle_controls(self) -> None:
@@ -373,6 +404,10 @@ class MainWindow(QMainWindow):
         self.clear_button.setEnabled(True)
         self.refresh_button.setEnabled(True)
         self.rules_button.setEnabled(True)
+        self.load_history_button.setEnabled(True)
+        self.export_button.setEnabled(True)
+        self.clear_logs_button.setEnabled(True)
+        self.alert_filter_combo.setEnabled(True)
         self.advanced_interfaces_checkbox.setEnabled(True)
         self.interface_combo.setEnabled(True)
 
@@ -383,8 +418,105 @@ class MainWindow(QMainWindow):
         self.clear_button.setEnabled(False)
         self.refresh_button.setEnabled(False)
         self.rules_button.setEnabled(False)
+        self.load_history_button.setEnabled(False)
+        self.export_button.setEnabled(False)
+        self.clear_logs_button.setEnabled(False)
+        self.alert_filter_combo.setEnabled(False)
         self.advanced_interfaces_checkbox.setEnabled(False)
         self.interface_combo.setEnabled(False)
+
+    def load_alert_history(self) -> None:
+        if self._has_current_alert_view_data():
+            answer = QMessageBox.question(
+                self,
+                "Load History",
+                "Replace the current Alerts view with historical alerts from SQLite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        alerts = self.database.fetch_alerts()
+        self.load_alerts_into_current_view(alerts)
+
+        filter_text = self.alert_filter_combo.currentText()
+        matching_count = self.count_matching_current_alerts()
+        self.statusBar().showMessage(
+            f"Loaded {len(alerts)} alerts from SQLite; "
+            f"showing {self.alerts_table.rowCount()} of {matching_count} {filter_text.lower()}"
+        )
+
+    def export_alerts_csv(self) -> None:
+        alert_filter = self.current_alert_filter()
+        alerts = self.database.fetch_alerts(alert_filter)
+        if not alerts:
+            QMessageBox.information(self, "Export CSV", "No matching alerts to export.")
+            return
+
+        file_name, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Alerts CSV",
+            "lightids_alerts.csv",
+            "CSV files (*.csv);;All files (*.*)",
+        )
+        if not file_name:
+            return
+
+        export_path = Path(file_name)
+        if export_path.suffix.lower() != ".csv":
+            export_path = export_path.with_suffix(".csv")
+
+        headers = ["Time", "Severity", "SID", "Message", "Protocol", "Source", "Destination", "Type"]
+        try:
+            with export_path.open("w", newline="", encoding="utf-8-sig") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow(headers)
+                for alert in alerts:
+                    writer.writerow(self._alert_csv_row(alert))
+        except OSError as exc:
+            QMessageBox.warning(self, "Export CSV", f"Failed to export CSV:\n{exc}")
+            self.statusBar().showMessage("Failed to export alerts CSV")
+            return
+
+        filter_text = self.alert_filter_combo.currentText()
+        self.statusBar().showMessage(
+            f"Exported {len(alerts)} {filter_text.lower()} from SQLite to {export_path}"
+        )
+
+    def current_alert_filter(self) -> str | None:
+        value = self.alert_filter_combo.currentData()
+        return str(value) if value is not None else None
+
+    def _alert_csv_row(self, alert: AlertEvent) -> list[str]:
+        return [
+            alert.timestamp_text,
+            str(alert.severity),
+            alert.display_sid,
+            alert.message,
+            alert.protocol,
+            alert.source_text,
+            alert.destination_text,
+            alert.alert_type,
+        ]
+
+    def clear_alert_logs(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Clear Logs",
+            "Clear all historical alert records from SQLite?\n\n"
+            "This will not delete Traffic rows, rules, config files, or logs/lightids.log.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        deleted_count = self.database.clear_alerts()
+        self.clear_alert_view()
+        self.statusBar().showMessage(
+            f"Cleared {deleted_count} historical alert records; new detections will be stored again"
+        )
 
     def reload_rules(self) -> None:
         rules_path = Path(self.config.default_rules_path)
@@ -459,24 +591,108 @@ class MainWindow(QMainWindow):
 
     def clear_traffic(self) -> None:
         self.traffic_table.setRowCount(0)
-        self.alerts_table.setRowCount(0)
+        self.clear_alert_view(refresh_statistics=False)
         self._reset_threshold_detector()
+        self.last_capture_interface = None
         for rule in self.rules:
             rule.hit_count = 0
             rule.last_hit = None
         self.total_packets = 0
-        self.total_alerts = 0
-        self.high_severity_alerts = 0
         self.protocol_counts = {"TCP": 0, "UDP": 0, "ICMP": 0, "ARP": 0, "OTHER": 0}
-        self.alert_severity_counts = {}
-        self.alert_type_counts = {"rule_event": 0, "threshold_alert": 0}
-        self.total_packets_label.setText("Total packets: 0")
-        self.total_alerts_label.setText("Total alerts: 0")
-        self.high_alerts_label.setText("High severity alerts: 0")
-        self.update_statistics_labels()
+        self.refresh_statistics_view()
         if self.rules:
             self.populate_rules_table()
         self.statusBar().showMessage("Traffic and current event view cleared")
+
+    def clear_alert_view(self, refresh_statistics: bool = True) -> None:
+        self.alerts_table.setRowCount(0)
+        self.current_alerts = []
+        self.reset_alert_statistics()
+        if refresh_statistics:
+            self.refresh_statistics_view()
+
+    def reset_alert_statistics(self) -> None:
+        self.total_alerts = 0
+        self.high_severity_alerts = 0
+        self.alert_severity_counts = {}
+        self.alert_type_counts = {"rule_event": 0, "threshold_alert": 0}
+
+    def load_alerts_into_current_view(self, alerts: list[AlertEvent]) -> None:
+        self.current_alerts = list(alerts)
+        self.recalculate_alert_statistics()
+        self.rebuild_alert_table_from_current_alerts()
+        self.refresh_statistics_view()
+
+    def recalculate_alert_statistics(self) -> None:
+        self.reset_alert_statistics()
+        for alert in self.current_alerts:
+            self.record_alert_statistics(alert)
+
+    def record_alert_statistics(self, alert: AlertEvent) -> None:
+        self.total_alerts += 1
+        if alert.severity <= 2:
+            self.high_severity_alerts += 1
+        self.alert_severity_counts[alert.severity] = self.alert_severity_counts.get(alert.severity, 0) + 1
+        self.alert_type_counts[alert.alert_type] = self.alert_type_counts.get(alert.alert_type, 0) + 1
+
+    def _has_current_session_data(self) -> bool:
+        return (
+            self.total_packets > 0
+            or self.total_alerts > 0
+            or self.traffic_table.rowCount() > 0
+            or self.alerts_table.rowCount() > 0
+        )
+
+    def _has_current_alert_view_data(self) -> bool:
+        return self.total_alerts > 0 or self.alerts_table.rowCount() > 0 or bool(self.current_alerts)
+
+    def apply_alert_filter(self, index: int | None = None) -> None:
+        self.rebuild_alert_table_from_current_alerts()
+        self.refresh_statistics_view()
+        matching_count = self.count_matching_current_alerts()
+        self.statusBar().showMessage(
+            f"Showing {self.alerts_table.rowCount()} of {matching_count} "
+            f"{self.alert_filter_combo.currentText().lower()}"
+        )
+
+    def count_matching_current_alerts(self) -> int:
+        return sum(1 for alert in self.current_alerts if self.alert_matches_current_filter(alert))
+
+    def alert_matches_current_filter(self, alert: AlertEvent) -> bool:
+        alert_filter = self.current_alert_filter()
+        return alert_filter is None or alert.alert_type == alert_filter
+
+    def rebuild_alert_table_from_current_alerts(self) -> None:
+        self.alerts_table.setUpdatesEnabled(False)
+        try:
+            self.alerts_table.setRowCount(0)
+            for alert in self.current_alerts:
+                if self.alert_matches_current_filter(alert):
+                    self.append_alert_row(alert)
+        finally:
+            self.alerts_table.setUpdatesEnabled(True)
+
+    def _confirm_new_interface_session(self, interface: str) -> bool:
+        if self.last_capture_interface in {None, interface}:
+            return True
+        if not self._has_current_session_data():
+            return True
+
+        answer = QMessageBox.question(
+            self,
+            "Switch Interface",
+            "You selected a different network interface.\n\n"
+            "Clear the current Traffic, Alerts, and Statistics before starting?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Yes:
+            self.clear_traffic()
+        return True
 
     def add_packet_info(self, packet: PacketInfo) -> None:
         self.add_packet_summary(summary_from_packet_info(packet))
@@ -489,20 +705,28 @@ class MainWindow(QMainWindow):
         self.traffic_table.setUpdatesEnabled(False)
         self.alerts_table.setUpdatesEnabled(False)
         rules_changed = False
+        batch_alerts: list[AlertEvent] = []
         try:
             for packet in packets:
                 self.add_packet_summary(summary_from_packet_info(packet), refresh_statistics=False)
-                rules_changed = (
-                    self.detect_packet(packet, refresh_rules=False, refresh_statistics=False)
-                    or rules_changed
-                )
+                alerts, has_signature_alerts = self.detect_packet_alerts(packet)
+                batch_alerts.extend(alerts)
+                rules_changed = has_signature_alerts or rules_changed
+                for alert in alerts:
+                    self.add_alert_event(alert, refresh_statistics=False)
         finally:
             self.traffic_table.setUpdatesEnabled(True)
             self.alerts_table.setUpdatesEnabled(True)
 
+        self.database.insert_alerts(batch_alerts)
         if rules_changed:
             self.populate_rules_table()
         self.refresh_statistics_view()
+
+    def detect_packet_alerts(self, packet: PacketInfo) -> tuple[list[AlertEvent], bool]:
+        signature_alerts = self.signature_detector.detect(packet)
+        threshold_alerts = self.threshold_detector.detect(packet)
+        return signature_alerts + threshold_alerts, bool(signature_alerts)
 
     def detect_packet(
         self,
@@ -510,20 +734,31 @@ class MainWindow(QMainWindow):
         refresh_rules: bool = True,
         refresh_statistics: bool = True,
     ) -> bool:
-        signature_alerts = self.signature_detector.detect(packet)
-        threshold_alerts = self.threshold_detector.detect(packet)
-        alerts = signature_alerts + threshold_alerts
+        alerts, has_signature_alerts = self.detect_packet_alerts(packet)
         if not alerts:
             return False
 
+        self.database.insert_alerts(alerts)
         for alert in alerts:
-            self.database.insert_alert(alert)
             self.add_alert_event(alert, refresh_statistics=refresh_statistics)
-        if signature_alerts and refresh_rules:
+        if has_signature_alerts and refresh_rules:
             self.populate_rules_table()
-        return bool(signature_alerts)
+        return has_signature_alerts
 
     def add_alert_event(self, alert: AlertEvent, refresh_statistics: bool = True) -> None:
+        self.current_alerts.append(alert)
+        self.record_alert_statistics(alert)
+        if self.alert_matches_current_filter(alert):
+            self.append_alert_row(alert)
+
+        if refresh_statistics:
+            self.refresh_statistics_view()
+
+    def append_alert_row(self, alert: AlertEvent) -> None:
+        max_rows = self.config.capture.max_display_alerts
+        if self.alerts_table.rowCount() >= max_rows:
+            self.alerts_table.removeRow(0)
+
         row = self.alerts_table.rowCount()
         self.alerts_table.insertRow(row)
         values = [
@@ -538,14 +773,6 @@ class MainWindow(QMainWindow):
         ]
         for column, value in enumerate(values):
             self.alerts_table.setItem(row, column, self._table_item(value))
-
-        self.total_alerts += 1
-        if alert.severity <= 2:
-            self.high_severity_alerts += 1
-        self.alert_severity_counts[alert.severity] = self.alert_severity_counts.get(alert.severity, 0) + 1
-        self.alert_type_counts[alert.alert_type] = self.alert_type_counts.get(alert.alert_type, 0) + 1
-        if refresh_statistics:
-            self.refresh_statistics_view()
 
     def add_packet_summary(self, packet: PacketSummary, refresh_statistics: bool = True) -> None:
         max_rows = self.config.capture.max_display_packets

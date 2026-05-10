@@ -133,3 +133,101 @@ class DatabaseManager:
             return int(cursor.lastrowid)
         finally:
             connection.close()
+
+    def insert_alerts(self, alerts: list[AlertEvent]) -> int:
+        if not alerts:
+            return 0
+
+        connection = self.connect()
+        try:
+            connection.executemany(
+                """
+                INSERT INTO alerts(
+                    timestamp,
+                    source_ip,
+                    source_port,
+                    destination_ip,
+                    destination_port,
+                    protocol,
+                    severity,
+                    rule_sid,
+                    message,
+                    packet_length,
+                    alert_type
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        alert.timestamp.isoformat(),
+                        alert.src_ip,
+                        alert.src_port,
+                        alert.dst_ip,
+                        alert.dst_port,
+                        alert.protocol,
+                        alert.severity,
+                        alert.rule_sid,
+                        alert.message,
+                        alert.packet_length,
+                        alert.alert_type,
+                    )
+                    for alert in alerts
+                ],
+            )
+            connection.commit()
+            return len(alerts)
+        finally:
+            connection.close()
+
+    def fetch_alerts(self, alert_type: str | None = None) -> list[AlertEvent]:
+        connection = self.connect()
+        try:
+            query = """
+            SELECT
+                timestamp,
+                source_ip,
+                source_port,
+                destination_ip,
+                destination_port,
+                protocol,
+                severity,
+                rule_sid,
+                message,
+                packet_length,
+                alert_type
+            FROM alerts
+            """
+            parameters: tuple[str, ...] = ()
+            if alert_type is not None:
+                query += " WHERE alert_type = ?"
+                parameters = (alert_type,)
+            query += " ORDER BY id ASC"
+            rows = connection.execute(query, parameters).fetchall()
+        finally:
+            connection.close()
+
+        return [
+            AlertEvent(
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                message=str(row["message"]),
+                severity=int(row["severity"]),
+                protocol=str(row["protocol"]),
+                alert_type=str(row["alert_type"]),
+                src_ip=row["source_ip"],
+                dst_ip=row["destination_ip"],
+                src_port=row["source_port"],
+                dst_port=row["destination_port"],
+                rule_sid=row["rule_sid"],
+                packet_length=int(row["packet_length"] or 0),
+            )
+            for row in rows
+        ]
+
+    def clear_alerts(self) -> int:
+        connection = self.connect()
+        try:
+            cursor = connection.execute("DELETE FROM alerts")
+            connection.commit()
+            return int(cursor.rowcount)
+        finally:
+            connection.close()
