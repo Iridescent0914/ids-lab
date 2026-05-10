@@ -13,15 +13,34 @@ from app.storage.database import DatabaseManager
 from app.ui.main_window import MainWindow
 
 
-def project_root() -> Path:
+def resource_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     return Path(__file__).resolve().parents[1]
 
 
-def bootstrap(root: Path) -> tuple[AppConfig, DatabaseManager]:
-    config = load_config(root / "config" / "config.json", root)
-    setup_logging(root / config.log_file, config.log_level)
+def runtime_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return resource_root()
 
-    database = DatabaseManager(root / config.database_path)
+
+def _resolve_runtime_path(path: Path, root: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def project_root() -> Path:
+    return resource_root()
+
+
+def bootstrap(root: Path) -> tuple[AppConfig, DatabaseManager]:
+    run_root = runtime_root()
+    config = load_config(root / "config" / "config.json", root)
+    setup_logging(_resolve_runtime_path(config.log_file, run_root), config.log_level)
+
+    database = DatabaseManager(_resolve_runtime_path(config.database_path, run_root))
     database.initialize()
     database.record_app_event("application_initialized", "LightIDS started")
     return config, database

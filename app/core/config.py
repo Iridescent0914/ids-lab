@@ -39,6 +39,13 @@ def _require_mapping(data: Any, name: str) -> dict[str, Any]:
     return data
 
 
+def _resolve_path(value: Any, default: str, root: Path) -> Path:
+    path = Path(value or default)
+    if path.is_absolute():
+        return path
+    return root / path
+
+
 def load_config(path: Path, root: Path) -> AppConfig:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -56,7 +63,11 @@ def load_config(path: Path, root: Path) -> AppConfig:
         database_path=Path(storage.get("database_path", "data/lightids.db")),
         log_file=Path(logging_config.get("file", "logs/lightids.log")),
         log_level=str(logging_config.get("level", "INFO")).upper(),
-        default_rules_path=Path(rules.get("default_rules_path", "rules/default.rules")),
+        default_rules_path=_resolve_path(
+            rules.get("default_rules_path", "rules/default.rules"),
+            "rules/default.rules",
+            root,
+        ),
         threshold=ThresholdConfig(
             window_seconds=int(threshold.get("window_seconds", 10)),
             port_scan_unique_ports=int(threshold.get("port_scan_unique_ports", 10)),
