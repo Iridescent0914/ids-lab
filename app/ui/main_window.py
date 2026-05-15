@@ -336,7 +336,10 @@ class MainWindow(QMainWindow):
 
         self._reset_threshold_detector()
         self.capture_thread = QThread(self)
-        self.capture_worker = PacketCaptureWorker(interface=interface)
+        self.capture_worker = PacketCaptureWorker(
+            interface=interface,
+            timeout_seconds=self.config.capture.default_timeout_seconds,
+        )
         self.capture_worker.moveToThread(self.capture_thread)
 
         self.capture_thread.started.connect(self.capture_worker.run)

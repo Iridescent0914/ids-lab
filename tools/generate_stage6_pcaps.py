@@ -1,10 +1,10 @@
-"""Generate controlled PCAP files for LightIDS stage 6 validation."""
+"""Generate controlled PCAP files for LightIDS validation."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from scapy.all import ICMP, IP, TCP, UDP, wrpcap
+from scapy.all import ICMP, IP, Raw, TCP, UDP, wrpcap
 
 
 OUTPUT_DIR = Path("data") / "stage6_pcaps"
@@ -12,6 +12,33 @@ BASE_TIME = 1_710_000_000.0
 PORT_SCAN_PORTS = [20, 21, 22, 23, 25, 53, 80, 110, 139, 443]
 HORIZONTAL_SCAN_HOSTS = [f"192.168.0.{host}" for host in range(101, 111)]
 ICMP_REQUEST_COUNT = 20
+SENSITIVE_SERVICE_PORTS = [21, 22, 23, 445, 3389, 3306]
+
+
+def _join(*parts: bytes) -> bytes:
+    return b"".join(parts)
+
+
+def web_attack_payloads() -> list[bytes]:
+    return [
+        _join(b"GET /search?q=UNION ", b"SELECT password FROM users HTTP/1.1\r\nHost: lab\r\n\r\n"),
+        _join(b"GET /comment?text=<scr", b"ipt>alert(1)</scr", b"ipt> HTTP/1.1\r\nHost: lab\r\n\r\n"),
+        _join(b"GET /download?file=../", b"../etc/shadow HTTP/1.1\r\nHost: lab\r\n\r\n"),
+        _join(b"GET /view?path=/etc/", b"passwd HTTP/1.1\r\nHost: lab\r\n\r\n"),
+        _join(b"GET /admin?c", b"md=id HTTP/1.1\r\nHost: lab\r\n\r\n"),
+        _join(b"POST /upload.php HTTP/1.1\r\nHost: lab\r\n\r\n<?php ev", b"al($_POST['x']); ?>"),
+    ]
+
+
+def benign_http_payloads() -> list[bytes]:
+    return [
+        b"GET /index.html HTTP/1.1\r\nHost: lab\r\n\r\n",
+        b"GET /about HTTP/1.1\r\nHost: lab\r\n\r\n",
+        b"POST /login HTTP/1.1\r\nHost: lab\r\n\r\nusername=alice&remember=yes",
+        b"GET /static/app.css HTTP/1.1\r\nHost: lab\r\n\r\n",
+        b"GET /api/status HTTP/1.1\r\nHost: lab\r\n\r\n",
+        b"POST /comment HTTP/1.1\r\nHost: lab\r\n\r\nmessage=hello",
+    ]
 
 
 def set_time(packet, timestamp: float):
@@ -43,6 +70,54 @@ def tcp_horizontal_scan_positive() -> list:
             sport=44000 + index,
             dport=445,
             flags="S",
+        )
+        packets.append(set_time(packet, BASE_TIME + index))
+    return packets
+
+
+def rule_sensitive_services_positive() -> list:
+    packets = []
+    for index, port in enumerate(SENSITIVE_SERVICE_PORTS):
+        packet = IP(src="192.168.0.60", dst="192.168.0.100") / TCP(
+            sport=45000 + index,
+            dport=port,
+            flags="S",
+        )
+        packets.append(set_time(packet, BASE_TIME + index))
+    return packets
+
+
+def rule_sensitive_services_ack_negative() -> list:
+    packets = []
+    for index, port in enumerate(SENSITIVE_SERVICE_PORTS):
+        packet = IP(src="192.168.0.60", dst="192.168.0.100") / TCP(
+            sport=45100 + index,
+            dport=port,
+            flags="A",
+        )
+        packets.append(set_time(packet, BASE_TIME + index))
+    return packets
+
+
+def rule_web_attacks_positive() -> list:
+    packets = []
+    for index, payload in enumerate(web_attack_payloads()):
+        packet = (
+            IP(src="192.168.0.61", dst="192.168.0.200")
+            / TCP(sport=46000 + index, dport=80, flags="PA")
+            / Raw(load=payload)
+        )
+        packets.append(set_time(packet, BASE_TIME + index))
+    return packets
+
+
+def rule_benign_http_negative() -> list:
+    packets = []
+    for index, payload in enumerate(benign_http_payloads()):
+        packet = (
+            IP(src="192.168.0.61", dst="192.168.0.200")
+            / TCP(sport=46100 + index, dport=80, flags="PA")
+            / Raw(load=payload)
         )
         packets.append(set_time(packet, BASE_TIME + index))
     return packets
@@ -125,6 +200,10 @@ def multicast_negative() -> list:
 
 def main() -> None:
     pcaps = {
+        "rule_sensitive_services_positive.pcap": rule_sensitive_services_positive(),
+        "rule_sensitive_services_ack_negative.pcap": rule_sensitive_services_ack_negative(),
+        "rule_web_attacks_positive.pcap": rule_web_attacks_positive(),
+        "rule_benign_http_negative.pcap": rule_benign_http_negative(),
         "tcp_syn_scan_positive.pcap": tcp_syn_scan_positive(),
         "tcp_horizontal_scan_positive.pcap": tcp_horizontal_scan_positive(),
         "tcp_synack_negative.pcap": tcp_synack_negative(),
