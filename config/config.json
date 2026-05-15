@@ -18,6 +18,7 @@
   "threshold": {
     "window_seconds": 10,
     "port_scan_unique_ports": 10,
+    "horizontal_scan_unique_hosts": 10,
     "icmp_high_frequency_count": 20
   }
 }

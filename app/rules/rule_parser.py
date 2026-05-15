@@ -99,6 +99,7 @@ def _parse_options(options_text: str, rule: DetectionRule) -> None:
     rule.content = _optional_text(rule.options.get("content"))
     rule.flags = _optional_text(rule.options.get("flags"))
     rule.nocase = bool(rule.options.get("nocase", False))
+    rule.icmp_type = _parse_icmp_type(rule)
 
     sid_value = rule.options.get("sid")
     if isinstance(sid_value, str) and sid_value.isdigit():
@@ -152,6 +153,18 @@ def _optional_text(value: str | bool | None) -> str | None:
     return None
 
 
+def _parse_icmp_type(rule: DetectionRule) -> int | None:
+    type_values = [
+        value
+        for key in ("itype", "icmp_type")
+        if isinstance((value := rule.options.get(key)), str)
+    ]
+    parsed_values = [int(value) for value in type_values if value.isdigit()]
+    if parsed_values:
+        return parsed_values[0]
+    return None
+
+
 def _validate_rule(rule: DetectionRule) -> None:
     if rule.action not in SUPPORTED_ACTIONS:
         rule.errors.append("unsupported action")
@@ -174,6 +187,8 @@ def _validate_rule(rule: DetectionRule) -> None:
     if "priority" in rule.options and rule.priority is None:
         rule.errors.append("priority must be a number")
 
+    _validate_icmp_type(rule)
+
 
 def _validate_port(port: str, label: str, rule: DetectionRule) -> None:
     if port == "any":
@@ -183,3 +198,24 @@ def _validate_port(port: str, label: str, rule: DetectionRule) -> None:
         if 0 <= value <= 65535:
             return
     rule.errors.append(f"{label} must be 'any' or 0-65535")
+
+
+def _validate_icmp_type(rule: DetectionRule) -> None:
+    type_keys = [key for key in ("itype", "icmp_type") if key in rule.options]
+    if not type_keys:
+        return
+
+    parsed_values: list[int] = []
+    for key in type_keys:
+        value = rule.options.get(key)
+        if not isinstance(value, str) or not value.isdigit():
+            rule.errors.append(f"{key} must be a number")
+            continue
+        parsed_value = int(value)
+        if not 0 <= parsed_value <= 255:
+            rule.errors.append(f"{key} must be 0-255")
+            continue
+        parsed_values.append(parsed_value)
+
+    if len(set(parsed_values)) > 1:
+        rule.errors.append("itype and icmp_type must match when both are set")

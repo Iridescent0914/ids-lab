@@ -58,6 +58,39 @@ class RuleEngineTests(unittest.TestCase):
 
         self.assertFalse(rule_matches_packet(rule, packet))
 
+    def test_sensitive_service_rule_matches_only_syn_attempt(self) -> None:
+        rule = parse_rule_line(
+            'alert tcp any any -> any 22 (msg:"SSH service access observed"; '
+            "sid:1002; priority:2; flags:S;)"
+        )
+        syn_packet = parse_packet(
+            IP(src="10.0.0.2", dst="10.0.0.3") / TCP(sport=44444, dport=22, flags="S")
+        )
+        ack_packet = parse_packet(
+            IP(src="10.0.0.2", dst="10.0.0.3") / TCP(sport=44444, dport=22, flags="A")
+        )
+
+        self.assertTrue(rule_matches_packet(rule, syn_packet))
+        self.assertFalse(rule_matches_packet(rule, ack_packet))
+
+    def test_icmp_type_rule_matches_echo_request(self) -> None:
+        rule = parse_rule_line(
+            'alert icmp any any -> any any (msg:"ICMP echo request observed"; '
+            "sid:1001; priority:4; itype:8;)"
+        )
+        packet = parse_packet(IP(src="10.0.0.2", dst="8.8.8.8") / ICMP(type=8, code=0))
+
+        self.assertTrue(rule_matches_packet(rule, packet))
+
+    def test_icmp_type_rule_does_not_match_echo_reply(self) -> None:
+        rule = parse_rule_line(
+            'alert icmp any any -> any any (msg:"ICMP echo request observed"; '
+            "sid:1001; priority:4; itype:8;)"
+        )
+        packet = parse_packet(IP(src="8.8.8.8", dst="10.0.0.2") / ICMP(type=0, code=0))
+
+        self.assertFalse(rule_matches_packet(rule, packet))
+
     def test_disabled_rule_does_not_match(self) -> None:
         rule = parse_rule_line(
             'alert icmp any any -> any any (msg:"ICMP packet observed"; sid:1001; priority:4;)'

@@ -25,6 +25,8 @@ def rule_matches_packet(rule: DetectionRule, packet: PacketInfo) -> bool:
         return False
     if rule.flags is not None and not _match_flags(rule.flags, packet.tcp_flags):
         return False
+    if rule.icmp_type is not None and not _match_icmp_type(rule.icmp_type, packet.icmp_type):
+        return False
     return True
 
 
@@ -68,3 +70,7 @@ def _match_flags(required_flags: str, packet_flags: str | None) -> bool:
     if packet_flags is None:
         return False
     return set(required_flags) == set(packet_flags)
+
+
+def _match_icmp_type(required_type: int, packet_type: int | None) -> bool:
+    return packet_type == required_type

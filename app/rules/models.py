@@ -24,6 +24,7 @@ class DetectionRule:
     content: str | None = None
     nocase: bool = False
     flags: str | None = None
+    icmp_type: int | None = None
     options: dict[str, str | bool] = field(default_factory=dict)
     enabled: bool = True
     hit_count: int = 0

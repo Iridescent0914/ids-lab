@@ -14,11 +14,16 @@ from app.storage.database import DatabaseManager
 BASE_TIME = datetime(2026, 5, 9, 12, 0, 0)
 
 
-def _detector(port_threshold: int = 3, icmp_threshold: int = 3) -> ThresholdDetector:
+def _detector(
+    port_threshold: int = 3,
+    horizontal_threshold: int = 3,
+    icmp_threshold: int = 3,
+) -> ThresholdDetector:
     return ThresholdDetector(
         ThresholdSettings(
             window_seconds=10,
             port_scan_unique_ports=port_threshold,
+            horizontal_scan_unique_hosts=horizontal_threshold,
             icmp_high_frequency_count=icmp_threshold,
         )
     )
@@ -181,6 +186,68 @@ class ThresholdDetectorTests(unittest.TestCase):
             alerts.extend(detector.detect(_tcp_packet(offset, port)))
         for offset, port in zip([12, 13, 14], [25, 80, 110]):
             alerts.extend(detector.detect(_tcp_packet(offset, port)))
+
+        self.assertEqual(len(alerts), 2)
+
+    def test_horizontal_scan_threshold_alert(self) -> None:
+        detector = _detector(horizontal_threshold=3)
+        alerts = []
+
+        for offset, host in enumerate(["10.0.0.10", "10.0.0.11", "10.0.0.12"]):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, host, 445)))
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].alert_type, "threshold_alert")
+        self.assertEqual(alerts[0].severity, 1)
+        self.assertIn("Possible horizontal scan", alerts[0].message)
+        self.assertEqual(alerts[0].dst_port, 445)
+
+    def test_horizontal_scan_below_threshold_does_not_alert(self) -> None:
+        detector = _detector(horizontal_threshold=3)
+        alerts = []
+
+        for offset, host in enumerate(["10.0.0.10", "10.0.0.11"]):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, host, 445)))
+
+        self.assertEqual(alerts, [])
+
+    def test_same_destination_host_does_not_count_as_horizontal_scan(self) -> None:
+        detector = _detector(horizontal_threshold=3)
+        alerts = []
+
+        for offset in range(3):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, "10.0.0.10", 445)))
+
+        self.assertEqual(alerts, [])
+
+    def test_horizontal_scan_uses_same_destination_port(self) -> None:
+        detector = _detector(horizontal_threshold=3)
+        alerts = []
+
+        for offset, (host, port) in enumerate(
+            [("10.0.0.10", 21), ("10.0.0.11", 22), ("10.0.0.12", 23)]
+        ):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, host, port)))
+
+        self.assertEqual(alerts, [])
+
+    def test_horizontal_scan_ignores_syn_ack_responses(self) -> None:
+        detector = _detector(horizontal_threshold=3)
+        alerts = []
+
+        for offset, host in enumerate(["10.0.0.10", "10.0.0.11", "10.0.0.12"]):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, host, 445, flags="SA")))
+
+        self.assertEqual(alerts, [])
+
+    def test_same_horizontal_scan_key_can_alert_again_after_suppression_window(self) -> None:
+        detector = _detector(horizontal_threshold=3)
+        alerts = []
+
+        for offset, host in zip([0, 1, 2], ["10.0.0.10", "10.0.0.11", "10.0.0.12"]):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, host, 445)))
+        for offset, host in zip([12, 13, 14], ["10.0.0.20", "10.0.0.21", "10.0.0.22"]):
+            alerts.extend(detector.detect(_tcp_packet_to(offset, host, 445)))
 
         self.assertEqual(len(alerts), 2)
 

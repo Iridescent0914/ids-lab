@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         return ThresholdSettings(
             window_seconds=self.config.threshold.window_seconds,
             port_scan_unique_ports=self.config.threshold.port_scan_unique_ports,
+            horizontal_scan_unique_hosts=self.config.threshold.horizontal_scan_unique_hosts,
             icmp_high_frequency_count=self.config.threshold.icmp_high_frequency_count,
         )
 
@@ -194,6 +195,7 @@ class MainWindow(QMainWindow):
         self.threshold_config_label = QLabel(
             "Thresholds: "
             f"{self.config.threshold.port_scan_unique_ports} ports / "
+            f"{self.config.threshold.horizontal_scan_unique_hosts} hosts / "
             f"{self.config.threshold.icmp_high_frequency_count} ICMP packets / "
             f"{self.config.threshold.window_seconds}s"
         )

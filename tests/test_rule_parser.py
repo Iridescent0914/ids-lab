@@ -34,6 +34,36 @@ class RuleParserTests(unittest.TestCase):
         self.assertTrue(rule.is_valid)
         self.assertEqual(rule.flags, "S")
 
+    def test_parse_icmp_type_rule(self) -> None:
+        rule = parse_rule_line(
+            'alert icmp any any -> any any (msg:"ICMP echo request observed"; '
+            "sid:1001; priority:4; itype:8;)",
+            line_number=1,
+        )
+
+        self.assertTrue(rule.is_valid)
+        self.assertEqual(rule.icmp_type, 8)
+
+    def test_parse_icmp_type_alias_rule(self) -> None:
+        rule = parse_rule_line(
+            'alert icmp any any -> any any (msg:"ICMP echo request observed"; '
+            "sid:1001; priority:4; icmp_type:8;)",
+            line_number=1,
+        )
+
+        self.assertTrue(rule.is_valid)
+        self.assertEqual(rule.icmp_type, 8)
+
+    def test_detect_mismatched_icmp_type_aliases(self) -> None:
+        rule = parse_rule_line(
+            'alert icmp any any -> any any (msg:"ICMP echo request observed"; '
+            "sid:1001; priority:4; itype:8; icmp_type:0;)",
+            line_number=1,
+        )
+
+        self.assertFalse(rule.is_valid)
+        self.assertIn("itype and icmp_type must match when both are set", rule.errors)
+
     def test_detect_missing_sid_and_bad_priority(self) -> None:
         rule = parse_rule_line(
             'alert icmp any any -> any any (msg:"ICMP packet"; priority:high;)',

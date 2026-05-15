@@ -10,6 +10,7 @@ from scapy.all import ICMP, IP, TCP, UDP, wrpcap
 OUTPUT_DIR = Path("data") / "stage6_pcaps"
 BASE_TIME = 1_710_000_000.0
 PORT_SCAN_PORTS = [20, 21, 22, 23, 25, 53, 80, 110, 139, 443]
+HORIZONTAL_SCAN_HOSTS = [f"192.168.0.{host}" for host in range(101, 111)]
 ICMP_REQUEST_COUNT = 20
 
 
@@ -29,6 +30,18 @@ def tcp_syn_scan_positive() -> list:
         packet = IP(src="192.168.0.51", dst="192.168.0.100") / TCP(
             sport=40000 + index,
             dport=port,
+            flags="S",
+        )
+        packets.append(set_time(packet, BASE_TIME + index))
+    return packets
+
+
+def tcp_horizontal_scan_positive() -> list:
+    packets = []
+    for index, host in enumerate(HORIZONTAL_SCAN_HOSTS):
+        packet = IP(src="192.168.0.51", dst=host) / TCP(
+            sport=44000 + index,
+            dport=445,
             flags="S",
         )
         packets.append(set_time(packet, BASE_TIME + index))
@@ -113,6 +126,7 @@ def multicast_negative() -> list:
 def main() -> None:
     pcaps = {
         "tcp_syn_scan_positive.pcap": tcp_syn_scan_positive(),
+        "tcp_horizontal_scan_positive.pcap": tcp_horizontal_scan_positive(),
         "tcp_synack_negative.pcap": tcp_synack_negative(),
         "dns_response_negative.pcap": dns_response_negative(),
         "icmp_request_positive.pcap": icmp_request_positive(),

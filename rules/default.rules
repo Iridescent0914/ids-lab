@@ -1,16 +1,15 @@
 # LightIDS default rules
-# These rules are grouped as sensitive service access, web attack indicators,
-# and scan/probe evidence.
+# These rules are grouped as sensitive service access and web attack indicators.
 # Threshold detection is still responsible for multi-packet behaviors such as
 # port scans and high-frequency ICMP traffic.
 
 # Sensitive service access events
-alert tcp any any -> any 21 (msg:"FTP service access observed"; sid:1101; priority:3;)
-alert tcp any any -> any 22 (msg:"SSH service access observed"; sid:1002; priority:2;)
-alert tcp any any -> any 23 (msg:"Telnet service access observed"; sid:1102; priority:2;)
-alert tcp any any -> any 445 (msg:"SMB service access observed"; sid:1103; priority:2;)
-alert tcp any any -> any 3389 (msg:"RDP service access observed"; sid:1104; priority:2;)
-alert tcp any any -> any 3306 (msg:"MySQL service access observed"; sid:1105; priority:3;)
+alert tcp any any -> any 21 (msg:"FTP service access observed"; sid:1101; priority:3; flags:S;)
+alert tcp any any -> any 22 (msg:"SSH service access observed"; sid:1002; priority:2; flags:S;)
+alert tcp any any -> any 23 (msg:"Telnet service access observed"; sid:1102; priority:2; flags:S;)
+alert tcp any any -> any 445 (msg:"SMB service access observed"; sid:1103; priority:2; flags:S;)
+alert tcp any any -> any 3389 (msg:"RDP service access observed"; sid:1104; priority:2; flags:S;)
+alert tcp any any -> any 3306 (msg:"MySQL service access observed"; sid:1105; priority:3; flags:S;)
 
 # Web attack indicators over plaintext HTTP payloads
 alert tcp any any -> any 80 (msg:"Possible SQL injection keyword observed"; sid:1201; priority:2; content:"union select"; nocase;)
@@ -20,12 +19,7 @@ alert tcp any any -> any 80 (msg:"Possible sensitive file access observed"; sid:
 alert tcp any any -> any 80 (msg:"Possible command execution parameter observed"; sid:1205; priority:3; content:"cmd="; nocase;)
 alert tcp any any -> any 80 (msg:"Possible PHP code injection keyword observed"; sid:1206; priority:2; content:"eval("; nocase;)
 
-# Scan/probe evidence for single packets.
-# Repeated probes are promoted to threshold_alert by the threshold detector.
-alert icmp any any -> any any (msg:"ICMP probing traffic observed"; sid:1001; priority:4;)
-alert tcp any any -> any any (msg:"TCP SYN probe observed"; sid:1005; priority:4; flags:S;)
-
 # 默认规则用于稳定触发和验证规则引擎；
-# 单包规则用于记录可疑事件、风险服务访问或攻击特征；
-# 阈值检测用于识别更接近攻击行为的异常流量；
+# 单包规则用于记录敏感服务连接尝试或 Web 攻击特征；
+# 阈值检测用于识别端口扫描、ICMP 高频等多包异常行为；
 # 系统实现的是简化 Snort 风格规则，而不是完整 Snort 规则兼容。

@@ -12,6 +12,7 @@ from typing import Any
 class ThresholdConfig:
     window_seconds: int
     port_scan_unique_ports: int
+    horizontal_scan_unique_hosts: int
     icmp_high_frequency_count: int
 
 
@@ -71,6 +72,7 @@ def load_config(path: Path, root: Path) -> AppConfig:
         threshold=ThresholdConfig(
             window_seconds=int(threshold.get("window_seconds", 10)),
             port_scan_unique_ports=int(threshold.get("port_scan_unique_ports", 10)),
+            horizontal_scan_unique_hosts=int(threshold.get("horizontal_scan_unique_hosts", 10)),
             icmp_high_frequency_count=int(threshold.get("icmp_high_frequency_count", 20)),
         ),
         capture=CaptureConfig(
