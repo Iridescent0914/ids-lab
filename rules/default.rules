@@ -1,7 +1,7 @@
-# LightIDS default rules
-# These rules are grouped as sensitive service access and web attack indicators.
-# Threshold detection is still responsible for multi-packet behaviors such as
-# port scans and high-frequency ICMP traffic.
+# 默认规则用于稳定触发和验证规则引擎；
+# 单包规则用于记录敏感服务连接尝试或 Web 攻击特征；
+# 阈值检测用于识别端口扫描、ICMP 高频等多包异常行为；
+# 系统实现的是简化 Snort 风格规则，而不是完整 Snort 规则兼容。
 
 # Sensitive service access events
 alert tcp any any -> any 21 (msg:"FTP service access observed"; sid:1101; priority:3; flags:S;)
@@ -16,10 +16,5 @@ alert tcp any any -> any 80 (msg:"Possible SQL injection keyword observed"; sid:
 alert tcp any any -> any 80 (msg:"Possible XSS payload observed"; sid:1202; priority:2; content:"<script"; nocase;)
 alert tcp any any -> any 80 (msg:"Possible directory traversal observed"; sid:1203; priority:2; content:"../"; nocase;)
 alert tcp any any -> any 80 (msg:"Possible sensitive file access observed"; sid:1204; priority:2; content:"/etc/passwd"; nocase;)
-alert tcp any any -> any 80 (msg:"Possible command execution parameter observed"; sid:1205; priority:3; content:"cmd="; nocase;)
+alert tcp any any -> any 80 (msg:"Possible command execution parameter observed"; sid:1205; priority:3; content:"?cmd="; nocase;)
 alert tcp any any -> any 80 (msg:"Possible PHP code injection keyword observed"; sid:1206; priority:2; content:"eval("; nocase;)
-
-# 默认规则用于稳定触发和验证规则引擎；
-# 单包规则用于记录敏感服务连接尝试或 Web 攻击特征；
-# 阈值检测用于识别端口扫描、ICMP 高频等多包异常行为；
-# 系统实现的是简化 Snort 风格规则，而不是完整 Snort 规则兼容。
