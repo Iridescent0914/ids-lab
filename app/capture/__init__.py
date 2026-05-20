@@ -1,1 +1,1 @@
-"""Packet capture and PCAP loading utilities."""
+"""数据采集包：负责实时抓包、PCAP 离线读取和界面展示摘要转换。"""

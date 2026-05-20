@@ -1,1 +1,5 @@
-"""Rule parsing and rule management package."""
+"""LightIDS 规则解析和规则模型包。
+
+``models`` 定义规则对象和加载结果；``rule_parser`` 负责把默认规则文件中的文本
+规则解析为结构化对象。检测层通过这些对象进行匹配，不直接解析规则字符串。
+"""
